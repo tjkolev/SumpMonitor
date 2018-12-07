@@ -8,20 +8,20 @@
 #define FLOAT_COUNT (FLOAT_FAIL+1)
 
 const char* floatNames[] = {
-  "Float_None",
-  "Float_Sump",
-  "Float_Backup",
-  "Float_Fail"
+  "Level-Dry",
+  "Level-SumpPump",
+  "Level-BackupPump",
+  "Level-Flood"
 };
 
-const char* getFloatName(int floatId) {
+const char* getLevelName(int floatId) {
   if(FLOAT_NONE <= floatId && floatId <= FLOAT_FAIL) {
     return floatNames[floatId];
   }
-  return "Float_Unknown";
+  return "Level-Unknown";
 }
 
-unsigned char debounceMask = 0x03; // Successive positive readings as bits (111)
+unsigned char debounceMask = 0x07; // Successive positive readings as bits (111)
 unsigned char floatDebounceBits[FLOAT_COUNT] = { 0x00, 0x00, 0x00, 0x00 };
 int floatRangeValues[FLOAT_COUNT][2] = {
   { 0, 20 },
@@ -52,14 +52,12 @@ int floatCheck() {
 int lastActivatedFloat = FLOAT_UNKNOWN;
 unsigned int lastLevelActivationMs = 0;
 unsigned int nextLevelCheckMs = 0;
-unsigned int minLevelCheckPeriodMs = 5 * 1000; // check no less than every 5 seconds
-unsigned int maxLevelCheckPeriodMs = 10 * 60 * 1000; // check no more than every 10 min
-
+unsigned int checkInMs = 5 * 1000; // every 5 seconds
 
 void onFloatCheck(int topFloat) {
   Serial.print("sec: ");Serial.println(millis()/1000);
-  Serial.print("topFloat: ");Serial.println(getFloatName(topFloat));
-  Serial.print("lastFloat: ");Serial.println(getFloatName(lastActivatedFloat));
+  Serial.print("topFloat: ");Serial.println(getLevelName(topFloat));
+  Serial.print("lastFloat: ");Serial.println(getLevelName(lastActivatedFloat));
 }
 
 void checkWaterLevel() {
@@ -70,16 +68,7 @@ void checkWaterLevel() {
   int topFloat = floatCheck();
   onFloatCheck(topFloat);
 
-  unsigned int checkInMs = 0;
-  if(FLOAT_UNKNOWN == topFloat || topFloat >= FLOAT_BACKUP) {
-    checkInMs = minLevelCheckPeriodMs;
-  }
-  else {
-    // next check is half the time since last active level, within bounds
-    checkInMs = (millis() - lastLevelActivationMs) / 2;
-    if(checkInMs < minLevelCheckPeriodMs) checkInMs = minLevelCheckPeriodMs;
-    if(checkInMs > maxLevelCheckPeriodMs) checkInMs = maxLevelCheckPeriodMs;
-
+  if(FLOAT_UNKNOWN != topFloat) {
     lastActivatedFloat = topFloat;
     if(topFloat >= FLOAT_SUMP) {
       lastLevelActivationMs = millis();
