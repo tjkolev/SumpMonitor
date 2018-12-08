@@ -1,11 +1,6 @@
 #include <Arduino.h>
-
-#define FLOAT_UNKNOWN (-1)
-#define FLOAT_NONE 0
-#define FLOAT_SUMP 1
-#define FLOAT_BACKUP 2
-#define FLOAT_FAIL 3
-#define FLOAT_COUNT (FLOAT_FAIL+1)
+#include <ArduinoJson.h>
+#include <main.h>
 
 const char* floatNames[] = {
   "Level-Dry",
@@ -14,6 +9,8 @@ const char* floatNames[] = {
   "Level-Flood"
 };
 
+ConfigParams configParams;
+
 const char* getLevelName(int floatId) {
   if(FLOAT_NONE <= floatId && floatId <= FLOAT_FAIL) {
     return floatNames[floatId];
@@ -21,14 +18,7 @@ const char* getLevelName(int floatId) {
   return "Level-Unknown";
 }
 
-unsigned char debounceMask = 0x07; // Successive positive readings as bits (111)
 unsigned char floatDebounceBits[FLOAT_COUNT] = { 0x00, 0x00, 0x00, 0x00 };
-int floatRangeValues[FLOAT_COUNT][2] = {
-  { 0, 20 },
-  { 80, 100 },
-  { 300, 500 },
-  { 800, 1024 }
-};
 
 int floatCheck() {
   int rawVal = analogRead(PIN_A0);
@@ -37,10 +27,10 @@ int floatCheck() {
   int floatId = FLOAT_UNKNOWN;
   for(int floatNdx = 0; floatNdx < FLOAT_COUNT; floatNdx++) {
     floatDebounceBits[floatNdx] = (floatDebounceBits[floatNdx] << 1);
-    if(floatRangeValues[floatNdx][0] <= rawVal && rawVal <= floatRangeValues[floatNdx][1]) {
+    if(configParams.FloatRangeValues[floatNdx][0] <= rawVal && rawVal <= configParams.FloatRangeValues[floatNdx][1]) {
       // Float activated.
       floatDebounceBits[floatNdx] += 1;
-      if(debounceMask == (floatDebounceBits[floatNdx] & debounceMask)) {
+      if(configParams.DebounceMask == (floatDebounceBits[floatNdx] & configParams.DebounceMask)) {
         floatId = floatNdx;
       }
     }
@@ -52,7 +42,6 @@ int floatCheck() {
 int lastActivatedFloat = FLOAT_UNKNOWN;
 unsigned int lastLevelActivationMs = 0;
 unsigned int nextLevelCheckMs = 0;
-unsigned int checkInMs = 5 * 1000; // every 5 seconds
 
 void onFloatCheck(int topFloat) {
   Serial.print("sec: ");Serial.println(millis()/1000);
@@ -75,7 +64,38 @@ void checkWaterLevel() {
     }
   }
 
-  nextLevelCheckMs = millis() + checkInMs;
+  nextLevelCheckMs = millis() + configParams.LevelCheckMs;
+}
+
+unsigned int nextUpdateConfigMs = 0;
+StaticJsonBuffer<1024> jsonBuffer;
+void updateConfig() {
+  if(millis() < nextUpdateConfigMs) {
+    return;
+  }
+
+  char json[] = "{\"MainLoopMs\":1000,\"UpdateConfigMs\":1800000,\"LevelCheckMs\":6000,\"DebounceMask\":7,"
+                 "\"Level0\":[0,20],\"Level1\":[80,100],\"Level2\":[300,500],\"Level3\":[800,1024]}";
+  JsonObject& config = jsonBuffer.parseObject(json);
+  if (config.success()) {
+    configParams.MainLoopMs = config["MainLoopMs"];
+    configParams.UpdateConfigMs = config["UpdateConfigMs"];
+    configParams.LevelCheckMs = config["LevelCheckMs"];
+    configParams.DebounceMask = config["DebounceMask"];
+
+    configParams.FloatRangeValues[0][0] = config["Level0"][0];
+    configParams.FloatRangeValues[0][1] = config["Level0"][1];
+    configParams.FloatRangeValues[1][0] = config["Level1"][0];
+    configParams.FloatRangeValues[1][1] = config["Level1"][1];
+    configParams.FloatRangeValues[2][0] = config["Level2"][0];
+    configParams.FloatRangeValues[2][1] = config["Level2"][1];
+    configParams.FloatRangeValues[3][0] = config["Level3"][0];
+    configParams.FloatRangeValues[3][1] = config["Level3"][1];
+  }
+  else {
+    Serial.println("Failed to parse json.");
+  }
+  nextUpdateConfigMs = millis() + configParams.UpdateConfigMs;
 }
 
 void setup() {
@@ -86,13 +106,13 @@ void setup() {
 }
 
 unsigned int nextLoopMs = 0;
-unsigned int loopMs = 1 * 1000;
 void loop() {
   // put your main code here, to run repeatedly:
   if(millis() >= nextLoopMs)
   {
+    updateConfig();
     checkWaterLevel();
-    nextLoopMs = millis() + loopMs;
+    nextLoopMs = millis() + configParams.MainLoopMs;
   }
 
   yield();
