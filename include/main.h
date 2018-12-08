@@ -15,9 +15,9 @@ struct ConfigParams {
   unsigned char DebounceMask = 0x07; // Successive positive readings as bits (111)
   int FloatRangeValues[FLOAT_COUNT][2] = {
     { 0, 20 },
-    { 80, 100 },
-    { 300, 500 },
-    { 800, 1024 }
+    { 300, 325 },
+    { 535, 555 },
+    { 1000, 1024 }
   };
 };
 

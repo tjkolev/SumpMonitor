@@ -75,7 +75,7 @@ void updateConfig() {
   }
 
   char json[] = "{\"MainLoopMs\":1000,\"UpdateConfigMs\":1800000,\"LevelCheckMs\":6000,\"DebounceMask\":7,"
-                 "\"Level0\":[0,20],\"Level1\":[80,100],\"Level2\":[300,500],\"Level3\":[800,1024]}";
+                 "\"Level0\":[0,20],\"Level1\":[300,325],\"Level2\":[535,555],\"Level3\":[900,1024]}";
   JsonObject& config = jsonBuffer.parseObject(json);
   if (config.success()) {
     configParams.MainLoopMs = config["MainLoopMs"];
