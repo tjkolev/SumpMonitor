@@ -16,7 +16,7 @@
 #define IOT_EVENT_FLOOD 3
 #define IOT_EVENT_RESET 4
 
-#define IOT_API_BASE_URL "http://" ROUTER_IP "/cgi-bin/luci/iot-helper/api"
+#define IOT_API_BASE_URL "http://" IOT_SERVICE_FQDN "/cgi-bin/luci/iot-helper/api"
 
 struct ConfigParams {
   unsigned long MainLoopMs = 1 * 1000; // every second

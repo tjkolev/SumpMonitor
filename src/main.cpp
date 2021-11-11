@@ -13,6 +13,8 @@ const char* floatNames[] = {
 
 ConfigParams configParams;
 
+void setupWiFi();
+
 const char* getLevelName(int floatId) {
   if(FLOAT_NONE <= floatId && floatId <= FLOAT_FAIL) {
     return floatNames[floatId];
@@ -51,7 +53,11 @@ unsigned long currentFloatSinceTime = 0;
 unsigned long nextLevelCheckTime = 0;
 
 bool checkWifi() {
-  return WiFi.status() == WL_CONNECTED;
+  bool wifiOK = (WiFi.status() == WL_CONNECTED);
+  if(!wifiOK) {
+    setupWiFi();
+  }
+  return (WiFi.status() == WL_CONNECTED);
 }
 
 HTTPClient httpClient;
@@ -218,23 +224,25 @@ void checkWaterLevel() {
   nextLevelCheckTime = millis() + (dryNotifySuspended ? configParams.LevelCheckMs : configParams.MainLoopMs);
 }
 
+void setupWiFi() {
+  Serial.println("Setting up Wifi.");
+  WiFi.persistent(false);
+  WiFi.mode(WIFI_OFF);
+  WiFi.mode(WIFI_STA);
+  WiFi.config(0U, 0U, 0U); // use DHCP
+  WiFi.setHostname("iotSumpPump");
+  WiFi.begin(WIFI_NETWORK, WIFI_PASSWORD);
+  delay(60 * 1000);
+  Serial.print("Setup done. "); Serial.print(WiFi.localIP()); Serial.print(" "); Serial.println(WiFi.macAddress());
+}
+
 void setup() {
   // put your setup code here, to run once:
   Serial.begin(115200);		 // Start the Serial communication to send messages to the computer
 	delay(10);
 	Serial.println('\n');
 
-  Serial.println("Setting up Wifi.");
-  WiFi.persistent(false);
-  WiFi.mode(WIFI_OFF);
-  WiFi.mode(WIFI_STA);
-  IPAddress ip(NETWORK_IP);
-  IPAddress gateway(NETWORK_GATEWAY);
-  IPAddress subnet(NETWORK_SUBNET);
-  WiFi.config(ip, gateway, subnet);
-  WiFi.begin(WIFI_NETWORK, WIFI_PASSWORD);
-  delay(60 * 1000);
-  Serial.println("Setup done.");
+  setupWiFi();
 }
 
 bool resetNotificationSent = false;
