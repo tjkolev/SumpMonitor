@@ -1,0 +1,12 @@
+#ifndef sensitive_h
+#define sensitive_h
+
+#define ROUTER_IP "192.168.xxx.yyy"
+#define NETWORK_GATEWAY 192,168,xxx,yyy
+#define NETWORK_SUBNET 255,255,255,0
+#define NETWORK_IP 192,168,xxx,zzz
+
+#define WIFI_NETWORK "ssid-name"
+#define WIFI_PASSWORD "secret-word"
+
+#endif // sensitive_h

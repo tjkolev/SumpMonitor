@@ -55,6 +55,8 @@ bool checkWifi() {
 }
 
 HTTPClient httpClient;
+WiFiClient wifiClient;
+
 void sendNotification(int eventId) {
   if(!checkWifi()) {
     Serial.println("Cannot notify: no wifi.");
@@ -64,19 +66,19 @@ void sendNotification(int eventId) {
   httpClient.setTimeout(10000);
   switch(eventId){
     case IOT_EVENT_DRY:
-      httpClient.begin(IOT_API_BASE_URL "/notify?eventid=sump_dry");
+      httpClient.begin(wifiClient, IOT_API_BASE_URL "/notify?eventid=sump_dry");
       break;
     case IOT_EVENT_SUMP:
-      httpClient.begin(IOT_API_BASE_URL "/notify?eventid=sump_sump");
+      httpClient.begin(wifiClient, IOT_API_BASE_URL "/notify?eventid=sump_sump");
       break;
     case IOT_EVENT_BACKUP:
-      httpClient.begin(IOT_API_BASE_URL "/notify?eventid=sump_backup");
+      httpClient.begin(wifiClient, IOT_API_BASE_URL "/notify?eventid=sump_backup");
       break;
     case IOT_EVENT_FLOOD:
-      httpClient.begin(IOT_API_BASE_URL "/notify?eventid=sump_flood");
+      httpClient.begin(wifiClient, IOT_API_BASE_URL "/notify?eventid=sump_flood");
       break;
     case IOT_EVENT_RESET:
-      httpClient.begin(IOT_API_BASE_URL "/notify?eventid=sump_reset");
+      httpClient.begin(wifiClient, IOT_API_BASE_URL "/notify?eventid=sump_reset");
       break;
     
     default:
@@ -131,7 +133,7 @@ void updateConfig() {
 
   if(checkWifi()) {
     httpClient.setTimeout(10000);
-    httpClient.begin(IOT_API_BASE_URL "/config?deviceid=sump");
+    httpClient.begin(wifiClient, IOT_API_BASE_URL "/config?deviceid=sump");
     int code = httpClient.GET();
     if(code == 200) {
       String body = httpClient.getString();
