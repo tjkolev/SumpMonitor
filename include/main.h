@@ -18,7 +18,7 @@
 
 #define IOT_API_BASE_URL "http://" IOT_SERVICE_FQDN "/cgi-bin/luci/iot-helper/api"
 
-struct ConfigParams {
+struct ApplicationConfig {
   unsigned long MainLoopMs = 1 * 1000; // every second
   unsigned long UpdateConfigMs = 1 * 60 * 1000;
   unsigned long LevelCheckMs = 5 * 1000;
@@ -35,5 +35,11 @@ struct ConfigParams {
     { 800, 1024 }
   };
 };
+
+extern ApplicationConfig AppConfig;
+
+bool ensureWiFi();
+void updateConfig();
+void sendNotification(int eventId);
 
 #endif // main_h
