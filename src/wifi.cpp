@@ -4,7 +4,7 @@
 
 void setupWiFi() {
   Serial.println("Setting up Wifi.");
-  
+
   WiFi.disconnect();
   delay(5 * 1000);
 
@@ -14,7 +14,7 @@ void setupWiFi() {
   WiFi.config(0U, 0U, 0U); // use DHCP
   WiFi.setHostname("iotSumpPump");
   WiFi.begin(WIFI_NETWORK, WIFI_PASSWORD);
-  
+
   delay(15 * 1000);
   for(int n = 0; n < 8; n++) {
     if(WiFi.status() == WL_CONNECTED) {
@@ -23,13 +23,16 @@ void setupWiFi() {
     delay(5 * 1000);
   }
 
-  Serial.print("Setup done. "); Serial.print(WiFi.localIP()); Serial.print(" "); Serial.println(WiFi.macAddress());
+  Serial.print("WiFi setup done. "); Serial.print(WiFi.localIP()); Serial.print(" "); Serial.println(WiFi.macAddress());
+}
+
+bool wifiConnected() {
+  return (WiFi.status() == WL_CONNECTED);
 }
 
 bool ensureWiFi() {
-  bool wifiOK = (WiFi.status() == WL_CONNECTED);
-  if(!wifiOK) {
+  if(!wifiConnected()) {
     setupWiFi();
   }
-  return (WiFi.status() == WL_CONNECTED);
+  return wifiConnected();
 }

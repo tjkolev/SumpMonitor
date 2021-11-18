@@ -8,101 +8,116 @@ WiFiClient wifiClient;
 
 ApplicationConfig AppConfig;
 
-// const char* floatNames[] = {
-//   "Level-Dry",
-//   "Level-SumpPump",
-//   "Level-BackupPump",
-//   "Level-Flood"
-// };
+unsigned long lastNotifyTime[IOT_EVENT_COUNT] = { 0, 0, 0, 0, 0, 0 };
 
-// const char* getLevelName(int floatId) {
-//   if(FLOAT_NONE <= floatId && floatId <= FLOAT_FAIL) {
-//     return floatNames[floatId];
-//   }
-//   return "Level-Unknown";
-// }
-
-void sendNotification(int eventId) {
+bool sendNotification(int eventId, uint8_t* msg, int msgLen) {
   if(!ensureWiFi()) {
     Serial.println("Cannot notify: no wifi.");
-    return;
+    return false;
   }
 
-  httpClient.setTimeout(10000);
-  switch(eventId){
+  const char* url;
+  switch(eventId) {
     case IOT_EVENT_DRY:
-      httpClient.begin(wifiClient, IOT_API_BASE_URL "/notify?eventid=sump_dry");
+      url = IOT_API_BASE_URL "/notify?eventid=sump_dry";
       break;
     case IOT_EVENT_SUMP:
-      httpClient.begin(wifiClient, IOT_API_BASE_URL "/notify?eventid=sump_sump");
+      url = IOT_API_BASE_URL "/notify?eventid=sump_sump";
       break;
     case IOT_EVENT_BACKUP:
-      httpClient.begin(wifiClient, IOT_API_BASE_URL "/notify?eventid=sump_backup");
+      url = IOT_API_BASE_URL "/notify?eventid=sump_backup";
       break;
     case IOT_EVENT_FLOOD:
-      httpClient.begin(wifiClient, IOT_API_BASE_URL "/notify?eventid=sump_flood");
+      url = IOT_API_BASE_URL "/notify?eventid=sump_flood";
       break;
     case IOT_EVENT_RESET:
-      httpClient.begin(wifiClient, IOT_API_BASE_URL "/notify?eventid=sump_reset");
+      url = IOT_API_BASE_URL "/notify?eventid=sump_reset";
       break;
-    
+    case IOT_EVENT_BAD_STATE:
+      url = IOT_API_BASE_URL "/notify?eventid=sump_badstate";
+      break;
+
     default:
-      return;
+      Serial.print("No notification defined for ");Serial.println(eventId);
+      return true;
   }
 
-  int code = httpClient.POST(NULL, 0);
+  unsigned long now = millis();
+  if(0 != lastNotifyTime[eventId] && (lastNotifyTime[eventId] + AppConfig.MinNotifyPeriodMs > now)) {
+    return true;
+  }
+  lastNotifyTime[eventId] = now;
+
+  bool result = false;
+  Serial.print(eventId);
+
+  httpClient.begin(wifiClient, url);
+  httpClient.setTimeout(10000);
+  int code = httpClient.POST(msg, msgLen);
   if(code == 200){
-    Serial.println("Notification sent.");
+    Serial.println(" - Notification sent.");
+    result = true;
   }
   else {
-    Serial.print("Failed to send notification. Http code ");Serial.println(code);
+    Serial.print(" - Failed to send notification. Http code ");Serial.println(code);
   }
   httpClient.end();
+
+  return result;
 }
 
-void parseConfig(const char* json) {
+template <typename T>
+bool updateValue(unsigned int newValue, T &currentValue, int multiplier = 1000) {
+  if (newValue) {
+    T cfgValue = newValue * multiplier;
+    if(cfgValue != currentValue) {
+      currentValue = cfgValue;
+      return true;
+    }
+  }
+  return false;
+}
+
+bool parseConfig(const char* json) {
   StaticJsonBuffer<1024> jsonBuffer;
   JsonObject& config = jsonBuffer.parseObject(json);
   if (!config.success()) {
     Serial.println("Failed to parse json.");
-    return;
+    return false;
   }
 
-  unsigned int pval;
-  if ((pval = config["MainLoopSec"])) AppConfig.MainLoopMs = pval * 1000;
-  if ((pval = config["UpdateConfigSec"])) AppConfig.UpdateConfigMs = pval * 1000;
-  if ((pval = config["LevelCheckSec"])) AppConfig.LevelCheckMs = pval * 1000;
-  if ((pval = config["DebounceMask"])) AppConfig.DebounceMask = (unsigned char) pval;
-  if ((pval = config["FloatBackupNotifyPeriodSec"])) AppConfig.FloatBackupNotifyPeriodMs = pval * 1000;
-  if ((pval = config["FloatFailNotifyPeriodSec"])) AppConfig.FloatFailNotifyPeriodMs = pval * 1000;
-  if ((pval = config["SumpThresholdNotifySec"])) AppConfig.SumpThresholdNotifyMs = pval * 1000;
-  if ((pval = config["DryAgeNotifySec"])) AppConfig.DryAgeNotifyMs = pval * 1000;
+  bool updated = updateValue(config["MainLoopSec"], AppConfig.MainLoopMs);
+  updated |= updateValue(config["UpdateConfigSec"], AppConfig.UpdateConfigMs);
+  updated |= updateValue(config["DebounceMask"], AppConfig.DebounceMask, 1);
+  updated |= updateValue(config["MinNotifyPeriodSec"], AppConfig.MinNotifyPeriodMs);
+  updated |= updateValue(config["DryAgeNotifySec"], AppConfig.DryAgeNotifyMs);
+  updated |= updateValue(config["MaxPumpRunTimeSec"], AppConfig.MaxPumpRunTimeMs);
+  updated |= updateValue(config["PumpTestRunSec"], AppConfig.PumpTestRunMs);
 
-  char lvlx[] = "Level_";
-  for(int fl = FLOAT_NONE; fl < FLOAT_COUNT; fl++) {
-    lvlx[5] = (char) (fl + 48);
-    if (config.containsKey(lvlx)) {
-      AppConfig.FloatRangeValues[fl][0] = config[lvlx][0];
-      AppConfig.FloatRangeValues[fl][1] = config[lvlx][1];
-    }
+  Serial.print("Configuration read from json - "); updated ? Serial.println("updated:") : Serial.println("no changes.");
+  if(updated) {
+    Serial.println(json);
   }
 
-  Serial.println("Configuration updated from json.");
+  return updated;
 }
 
-unsigned long nextUpdateConfigMs = 0;
-void updateConfig() {
-  if(millis() < nextUpdateConfigMs) {
-    return;
+unsigned long lastConfigUpdate = 0;
+bool updateConfig() {
+  unsigned long now = millis();
+  if(lastConfigUpdate + AppConfig.UpdateConfigMs > now) {
+    return false;
   }
+  lastConfigUpdate = now;
 
+  bool result = false;
   if(ensureWiFi()) {
     httpClient.setTimeout(10000);
     httpClient.begin(wifiClient, IOT_API_BASE_URL "/config?deviceid=sump");
     int code = httpClient.GET();
     if(code == 200) {
       String body = httpClient.getString();
-      parseConfig(body.c_str());
+      result = parseConfig(body.c_str());
     }
     else {
       Serial.print("Cannot pull config. Http code ");Serial.println(code);
@@ -113,6 +128,5 @@ void updateConfig() {
     Serial.println("Cannot pull config: no wifi.");
   }
 
-  nextUpdateConfigMs = millis() + AppConfig.UpdateConfigMs;
-  Serial.print("Next config update: ");Serial.println(nextUpdateConfigMs / 1000);
+  return result;
 }
