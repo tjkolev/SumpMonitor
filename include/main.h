@@ -3,6 +3,7 @@
 
 #include <sensitive.h>
 
+#define IOT_EVENT_NONE (-1)
 #define IOT_EVENT_DRY 0
 #define IOT_EVENT_SUMP 1
 #define IOT_EVENT_BACKUP 2
@@ -25,6 +26,9 @@ struct ApplicationConfig {
 
 extern ApplicationConfig AppConfig;
 
+#define TXT_BUFF_LEN 200
+extern char textBuffer[TXT_BUFF_LEN];
+
 bool ensureWiFi();
 bool wifiConnected();
 bool updateConfig();
@@ -32,6 +36,6 @@ void soundAlarm(int alarmEvent = 0);
 void stopAlarm();
 bool checkAlarm();
 void testAlarm();
-bool sendNotification(int eventId, uint8_t* msg = NULL, int msgLen = 0);
+bool sendNotification(int eventId, char* msg = NULL, int msgLen = 0);
 
 #endif // main_h

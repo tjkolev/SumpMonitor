@@ -7,8 +7,7 @@
 #define FLOAT_LEVEL_FLOOD   2
 #define FLOAT_LEVEL_COUNT   (FLOAT_LEVEL_FLOOD + 1)
 
-#define MSG_BUFF_LEN 200
-uint8_t msg[MSG_BUFF_LEN];
+char textBuffer[TXT_BUFF_LEN];
 
 enum ExecutionMode {
   Initializing,
@@ -134,9 +133,9 @@ bool floatStateChanged() {
 void logFloatsState() {
 
   if(floatStateChanged()) {
-    snprintf((char*)msg, MSG_BUFF_LEN, "Floats state: [%d %d %d].",
+    snprintf(textBuffer, TXT_BUFF_LEN, "Floats state: [%d %d %d].",
           floatState[FLOAT_LEVEL_SUMP], floatState[FLOAT_LEVEL_BACKUP], floatState[FLOAT_LEVEL_FLOOD]);
-    Serial.println((char*)msg);
+    Serial.println(textBuffer);
 
     loggedFloatState[FLOAT_LEVEL_SUMP] = floatState[FLOAT_LEVEL_SUMP];
     loggedFloatState[FLOAT_LEVEL_BACKUP] = floatState[FLOAT_LEVEL_BACKUP];
@@ -155,9 +154,9 @@ void checkAllFloats() {
   }
 
   if(!verifyFloatsState()) {
-    int msgLen = snprintf((char*)msg, MSG_BUFF_LEN, "Invalid floats state: [%d %d %d].",
+    int msgLen = snprintf(textBuffer, TXT_BUFF_LEN, "Invalid floats state: [%d %d %d].",
         floatState[FLOAT_LEVEL_SUMP], floatState[FLOAT_LEVEL_BACKUP], floatState[FLOAT_LEVEL_FLOOD]);
-    sendNotification(IOT_EVENT_BAD_STATE, msg, msgLen);
+    sendNotification(IOT_EVENT_BAD_STATE, textBuffer, msgLen);
     soundAlarm(IOT_EVENT_BAD_STATE);
   }
 
@@ -214,6 +213,8 @@ void setup() {
 
   setupIO();
   ensureWiFi();
+
+  updateConfig();
 
   execMode = Monitoring;
 }

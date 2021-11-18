@@ -3,68 +3,12 @@
 #include <ESP8266HTTPClient.h>
 #include <main.h>
 
-HTTPClient httpClient;
-WiFiClient wifiClient;
+extern HTTPClient httpClient;
+extern WiFiClient wifiClient;
 
 ApplicationConfig AppConfig;
 
-unsigned long lastNotifyTime[IOT_EVENT_COUNT] = { 0, 0, 0, 0, 0, 0 };
-
-bool sendNotification(int eventId, uint8_t* msg, int msgLen) {
-  if(!ensureWiFi()) {
-    Serial.println("Cannot notify: no wifi.");
-    return false;
-  }
-
-  const char* url;
-  switch(eventId) {
-    case IOT_EVENT_DRY:
-      url = IOT_API_BASE_URL "/notify?eventid=sump_dry";
-      break;
-    case IOT_EVENT_SUMP:
-      url = IOT_API_BASE_URL "/notify?eventid=sump_sump";
-      break;
-    case IOT_EVENT_BACKUP:
-      url = IOT_API_BASE_URL "/notify?eventid=sump_backup";
-      break;
-    case IOT_EVENT_FLOOD:
-      url = IOT_API_BASE_URL "/notify?eventid=sump_flood";
-      break;
-    case IOT_EVENT_RESET:
-      url = IOT_API_BASE_URL "/notify?eventid=sump_reset";
-      break;
-    case IOT_EVENT_BAD_STATE:
-      url = IOT_API_BASE_URL "/notify?eventid=sump_badstate";
-      break;
-
-    default:
-      Serial.print("No notification defined for ");Serial.println(eventId);
-      return true;
-  }
-
-  unsigned long now = millis();
-  if(0 != lastNotifyTime[eventId] && (lastNotifyTime[eventId] + AppConfig.MinNotifyPeriodMs > now)) {
-    return true;
-  }
-  lastNotifyTime[eventId] = now;
-
-  bool result = false;
-  Serial.print(eventId);
-
-  httpClient.begin(wifiClient, url);
-  httpClient.setTimeout(10000);
-  int code = httpClient.POST(msg, msgLen);
-  if(code == 200){
-    Serial.println(" - Notification sent.");
-    result = true;
-  }
-  else {
-    Serial.print(" - Failed to send notification. Http code ");Serial.println(code);
-  }
-  httpClient.end();
-
-  return result;
-}
+#define CONFIG_URL    IOT_API_BASE_URL "/config?deviceid=sump"
 
 template <typename T>
 bool updateValue(unsigned int newValue, T &currentValue, int multiplier = 1000) {
@@ -94,7 +38,8 @@ bool parseConfig(const char* json) {
   updated |= updateValue(config["MaxPumpRunTimeSec"], AppConfig.MaxPumpRunTimeMs);
   updated |= updateValue(config["PumpTestRunSec"], AppConfig.PumpTestRunMs);
 
-  Serial.print("Configuration read from json - "); updated ? Serial.println("updated:") : Serial.println("no changes.");
+  snprintf(textBuffer, TXT_BUFF_LEN, "Configuration pulled from %s - %s", CONFIG_URL, (updated ? "updated:": "no changes."));
+  Serial.println(textBuffer);
   if(updated) {
     Serial.println(json);
   }
@@ -113,7 +58,7 @@ bool updateConfig() {
   bool result = false;
   if(ensureWiFi()) {
     httpClient.setTimeout(10000);
-    httpClient.begin(wifiClient, IOT_API_BASE_URL "/config?deviceid=sump");
+    httpClient.begin(wifiClient, CONFIG_URL);
     int code = httpClient.GET();
     if(code == 200) {
       String body = httpClient.getString();
