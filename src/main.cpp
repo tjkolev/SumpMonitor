@@ -7,12 +7,11 @@
 #define FLOAT_LEVEL_FLOOD   2
 #define FLOAT_LEVEL_COUNT   (FLOAT_LEVEL_FLOOD + 1)
 
-char textBuffer[TXT_BUFF_LEN];
-
 enum ExecutionMode {
   Initializing,
   Monitoring,
   Pumping,
+  Resting,
 };
 ExecutionMode execMode = Initializing;
 
@@ -22,6 +21,20 @@ IRAM_ATTR void onButtonPress() {
   if(enableOnButtonPress) {
     testButtonPressed = true;
   }
+}
+
+char textBuffer[TXT_BUFF_LEN];
+void log(const char* format, ...)
+{
+  va_list args;
+  va_start(args, format);
+
+  snprintf(textBuffer, TXT_BUFF_LEN, "%lu ", millis());
+  size_t txtLen = strlen(textBuffer);
+  vsnprintf(textBuffer + txtLen, TXT_BUFF_LEN - txtLen, format, args);
+
+  va_end(args);
+  Serial.println(textBuffer);
 }
 
 void setupIO() {
@@ -42,29 +55,55 @@ void setupIO() {
   attachInterrupt(digitalPinToInterrupt(BUTTON_TEST_PIN), onButtonPress, RISING);
 }
 
-byte floatPin[FLOAT_LEVEL_COUNT] = { FLOAT_SUMP_PIN, FLOAT_BACKUP_PIN, FLOAT_FLOOD_PIN };
-byte floatDebounceBits[FLOAT_LEVEL_COUNT] = { 0x00, 0x00, 0x00};
-bool floatState[FLOAT_LEVEL_COUNT] = { false, false, false };
-bool loggedFloatState[FLOAT_LEVEL_COUNT] = { false, false, false };
+struct FloatData {
+  byte Pin;
+  byte DebounceBits = 0x00;
+  bool State = 0;
+  bool LoggedState = 0;
+
+  bool stateChanged() {
+    return State != LoggedState;
+  }
+
+  void logState() {
+    LoggedState = State;
+  }
+};
+
+#define FLOAT_COUNT   3
+FloatData floats[FLOAT_COUNT] = {
+  { .Pin = FLOAT_SUMP_PIN },
+  { .Pin = FLOAT_BACKUP_PIN },
+  { .Pin = FLOAT_FLOOD_PIN },
+};
+
+#define TXT_FLOAT_STATE_LEN   12
+char floatsState[TXT_FLOAT_STATE_LEN];
+char* getFloatsState() {
+  snprintf(floatsState, TXT_FLOAT_STATE_LEN, "[%d %d %d]",
+      floats[FLOAT_LEVEL_SUMP].State, floats[FLOAT_LEVEL_BACKUP].State, floats[FLOAT_LEVEL_FLOOD].State);
+  return floatsState;
+}
+
 byte inverseDebounceMask = ~AppConfig.DebounceMask;
 
 void checkFloat(int floatLevel) {
-  floatDebounceBits[floatLevel] = floatDebounceBits[floatLevel] << 1;
-  int pinVal = digitalRead(floatPin[floatLevel]);
-
+  FloatData& fdata = floats[floatLevel];
+  fdata.DebounceBits = fdata.DebounceBits << 1;
+  int pinVal = digitalRead(fdata.Pin);
   if(pinVal == 0) {
     // Pin is pulled up. Will read 0 when float switch is on.
-    floatDebounceBits[floatLevel] += 1;
+    fdata.DebounceBits += 1;
   }
 
   // So many consequtive times the switch was read as ON.
-  if(AppConfig.DebounceMask == (floatDebounceBits[floatLevel] & AppConfig.DebounceMask)) {
-    floatState[floatLevel] = true;
+  if(AppConfig.DebounceMask == (fdata.DebounceBits & AppConfig.DebounceMask)) {
+    fdata.State = true;
   }
 
   // So many consequtive times the switch was read as OFF.
-  if(inverseDebounceMask == (floatDebounceBits[floatLevel] | inverseDebounceMask)) {
-    floatState[floatLevel] = false;
+  if(inverseDebounceMask == (fdata.DebounceBits | inverseDebounceMask)) {
+    fdata.State = false;
   }
 
   return;
@@ -72,44 +111,47 @@ void checkFloat(int floatLevel) {
 
 bool verifyFloatsState() {
   for(int lvl = FLOAT_LEVEL_COUNT - 1; lvl > 0; lvl--) {
-    if(floatState[lvl] && !floatState[lvl-1]) {
+    if(floats[lvl].State && !floats[lvl-1].State) {
       return false;
     }
   }
   return true;
 }
 
-unsigned long pumpStarted;
+unsigned long pumpStarted = 0;
+
 void drivePump() {
 
   // Water too high. Need to start pumping.
-  if(floatState[FLOAT_LEVEL_BACKUP] || floatState[FLOAT_LEVEL_FLOOD]) {
+  if(floats[FLOAT_LEVEL_BACKUP].State || floats[FLOAT_LEVEL_FLOOD].State) {
     digitalWrite(RELAY_PUMP_PIN, 1); // Doesn't hurt to assert we need to pump.
     if(execMode != Pumping) {
-      execMode = Pumping;
       pumpStarted = millis();
-      int eventId = floatState[FLOAT_LEVEL_BACKUP] ? IOT_EVENT_BACKUP : IOT_EVENT_FLOOD;
+      int eventId = floats[FLOAT_LEVEL_BACKUP].State ? IOT_EVENT_BACKUP : IOT_EVENT_FLOOD;
       soundAlarm(eventId);
       sendNotification(eventId);
     }
+    execMode = Pumping;
     return;
   }
 
-  // Until the sump pump float is off.
-  if(!floatState[FLOAT_LEVEL_SUMP]) {
-    digitalWrite(RELAY_PUMP_PIN, 0);
-    if(execMode == Pumping) {
-      execMode = Monitoring;
-      pumpStarted = 0;
+  // Until the sump level float is off.
+  if(!floats[FLOAT_LEVEL_SUMP].State) {
+    if(execMode != Monitoring) {
       stopAlarm();
     }
+    digitalWrite(RELAY_PUMP_PIN, 0);
+    execMode = Monitoring;
+    pumpStarted = 0;
     return;
   }
 
-  // But if we've been pumping for too long - stop even if water level is higher.
+  // We end up here if the water leve is above sump but below backup level.
+  // If we've been pumping for too long - give the pump a break. If the water
+  // reaches backup level pump will start again unconditionally.
   if(execMode == Pumping) {
-    if(pumpStarted + AppConfig.MaxPumpRunTimeMs > millis()) {
-      Serial.println("Giving the pump some rest.");
+    if(pumpStarted + AppConfig.MaxPumpRunTimeMs < millis()) {
+      log("Giving the pump some rest.");
       digitalWrite(RELAY_PUMP_PIN, 0);
       execMode = Monitoring;
       pumpStarted = 0;
@@ -125,21 +167,19 @@ void testPump() {
 }
 
 bool floatStateChanged() {
-  return (floatState[FLOAT_LEVEL_SUMP] ^ loggedFloatState[FLOAT_LEVEL_SUMP])
-    | (floatState[FLOAT_LEVEL_BACKUP] ^ loggedFloatState[FLOAT_LEVEL_BACKUP])
-    | (floatState[FLOAT_LEVEL_FLOOD] ^ loggedFloatState[FLOAT_LEVEL_FLOOD]);
+  return floats[FLOAT_LEVEL_SUMP].stateChanged()
+    | floats[FLOAT_LEVEL_BACKUP].stateChanged()
+    | floats[FLOAT_LEVEL_FLOOD].stateChanged();
 }
 
 void logFloatsState() {
 
   if(floatStateChanged()) {
-    snprintf(textBuffer, TXT_BUFF_LEN, "Floats state: [%d %d %d].",
-          floatState[FLOAT_LEVEL_SUMP], floatState[FLOAT_LEVEL_BACKUP], floatState[FLOAT_LEVEL_FLOOD]);
-    Serial.println(textBuffer);
+    log("Floats state: %s", getFloatsState());
 
-    loggedFloatState[FLOAT_LEVEL_SUMP] = floatState[FLOAT_LEVEL_SUMP];
-    loggedFloatState[FLOAT_LEVEL_BACKUP] = floatState[FLOAT_LEVEL_BACKUP];
-    loggedFloatState[FLOAT_LEVEL_FLOOD] = floatState[FLOAT_LEVEL_FLOOD];
+    floats[FLOAT_LEVEL_SUMP].logState();
+    floats[FLOAT_LEVEL_BACKUP].logState();
+    floats[FLOAT_LEVEL_FLOOD].logState();
   }
 }
 
@@ -154,14 +194,13 @@ void checkAllFloats() {
   }
 
   if(!verifyFloatsState()) {
-    int msgLen = snprintf(textBuffer, TXT_BUFF_LEN, "Invalid floats state: [%d %d %d].",
-        floatState[FLOAT_LEVEL_SUMP], floatState[FLOAT_LEVEL_BACKUP], floatState[FLOAT_LEVEL_FLOOD]);
+    int msgLen = snprintf(textBuffer, TXT_BUFF_LEN, "Invalid floats state: %s.", getFloatsState());
     sendNotification(IOT_EVENT_BAD_STATE, textBuffer, msgLen);
     soundAlarm(IOT_EVENT_BAD_STATE);
   }
 
   unsigned long now = millis();
-  if(floatState[FLOAT_LEVEL_SUMP]) {
+  if(floats[FLOAT_LEVEL_SUMP].State) {
     sumpLevel_LastOnTime =
     sumpLevel_LastOffTime = now; // Move up (reset) the off time to avoid millis overflow issues.
     if(!trackDryPeriod) {
@@ -191,13 +230,12 @@ void runTest() {
 void checkButtonPress() {
 
   if(testButtonPressed) {
-    Serial.print("Button was pressed! ");
-    if(checkAlarm()) {
-      Serial.println("Stopping alarm.");
+    bool alarmOn = checkAlarm();
+    log("Button was pressed - %s", (alarmOn ? "Stopping alarm." : "Running test."));
+    if(alarmOn) {
       stopAlarm();
     }
     else {
-      Serial.println("Running test.");
       runTest();
     }
   }
@@ -207,9 +245,10 @@ void checkButtonPress() {
 
 void setup() {
   // put your setup code here, to run once:
-  Serial.begin(115200);		 // Start the Serial communication to send messages to the computer
-	delay(10);
-	Serial.println("\nSetting up...");
+  Serial.begin(115200); // Start the Serial communication to send messages to the computer
+  delay(10);
+
+  log("\nSetting up...");
 
   setupIO();
   ensureWiFi();

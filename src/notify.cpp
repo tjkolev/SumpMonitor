@@ -93,7 +93,7 @@ bool sendNotification(int eventId, char* msg, int msgLen) {
   lastNotifiedEventId = eventId;
 
   if(!ensureWiFi()) {
-    Serial.println("Cannot notify: no wifi.");
+    log("Cannot notify: no wifi.");
     return false;
   }
 
@@ -106,13 +106,11 @@ bool sendNotification(int eventId, char* msg, int msgLen) {
   httpClient.setTimeout(10000);
   int code = httpClient.POST((const uint8_t*)jsonText, jsonSize);
   if(code == 200){
-    Serial.println("Notification sent.");
-    Serial.println(jsonText);
+    log("Notification sent.\n%s", jsonText);
     result = true;
   }
   else {
-    Serial.print("Failed to send notification, http code ");Serial.println(code);
-    Serial.println(jsonText);
+    log("Failed to send notification, http code %d\n%s", code, jsonText);
   }
   httpClient.end();
 

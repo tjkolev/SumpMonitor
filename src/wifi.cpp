@@ -1,9 +1,10 @@
 #include <Arduino.h>
 #include <ESP8266WiFi.h>
 #include <sensitive.h>
+#include <main.h>
 
 void setupWiFi() {
-  Serial.println("Setting up Wifi.");
+  log("Setting up Wifi.");
 
   WiFi.disconnect();
   delay(5 * 1000);
@@ -23,7 +24,8 @@ void setupWiFi() {
     delay(5 * 1000);
   }
 
-  Serial.print("WiFi setup done. "); Serial.print(WiFi.localIP()); Serial.print(" "); Serial.println(WiFi.macAddress());
+  IPAddress ip = WiFi.localIP();
+  log("WiFi setup done. %d.%d.%d.%d %s", ip[0], ip[1], ip[2], ip[3], WiFi.macAddress().c_str());
 }
 
 bool wifiConnected() {

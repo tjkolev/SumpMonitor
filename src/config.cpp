@@ -26,7 +26,7 @@ bool parseConfig(const char* json) {
   StaticJsonBuffer<1024> jsonBuffer;
   JsonObject& config = jsonBuffer.parseObject(json);
   if (!config.success()) {
-    Serial.println("Failed to parse json.");
+    log("Failed to parse json:\n%s", json);
     return false;
   }
 
@@ -38,10 +38,9 @@ bool parseConfig(const char* json) {
   updated |= updateValue(config["MaxPumpRunTimeSec"], AppConfig.MaxPumpRunTimeMs);
   updated |= updateValue(config["PumpTestRunSec"], AppConfig.PumpTestRunMs);
 
-  snprintf(textBuffer, TXT_BUFF_LEN, "Configuration pulled from %s - %s", CONFIG_URL, (updated ? "updated:": "no changes."));
-  Serial.println(textBuffer);
+  log("Configuration pulled from %s - %s", CONFIG_URL, (updated ? "updated:": "no changes."));
   if(updated) {
-    Serial.println(json);
+    log(json);
   }
 
   return updated;
@@ -65,12 +64,12 @@ bool updateConfig() {
       result = parseConfig(body.c_str());
     }
     else {
-      Serial.print("Cannot pull config. Http code ");Serial.println(code);
+      log("Cannot pull config. Http code %d", code);
     }
     httpClient.end();
   }
   else {
-    Serial.println("Cannot pull config: no wifi.");
+   log("Cannot pull config: no wifi.");
   }
 
   return result;

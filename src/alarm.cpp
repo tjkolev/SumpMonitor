@@ -6,10 +6,10 @@
 #define BEEP_PERIOD_BACKUP      (15 * 1000) // 15 seconds
 #define BEEP_PERIOD_FLOOD       (5 * 1000) // 5 seconds
 
-int alarmEvent = 0;
+int currentAlarm = IOT_EVENT_NONE;
 
 // Using an active buzzer.
-// Blocking beep. Mind the length.
+// Blocking beep. Mind the for how long before this returns.
 void beepPattern(int beepCount, int beepLengthMs, int restMs) {
 
   digitalWrite(LED_RED_PIN, 0); //on
@@ -52,17 +52,21 @@ unsigned long lastBeepBadState = 0;
 unsigned long lastBeepFlood = 0;
 unsigned long lastBeepBackup = 0;
 
-void soundAlarm(int alarmEventId) {
+void soundAlarm(int incomingAlarm) {
 
-  if(alarmEventId > 0) {
-      alarmEvent = alarmEventId;
+  if(incomingAlarm > IOT_EVENT_NONE) {
+      if(incomingAlarm < currentAlarm) {
+        log("Current alarm: %d. Incoming alarm %d ignored.", currentAlarm, incomingAlarm);
+        return;
+      }
+      currentAlarm = incomingAlarm;
   }
 
-  if(alarmEvent <= 0) {
+  if(currentAlarm <= IOT_EVENT_NONE) {
       return;
   }
 
-  switch(alarmEvent) {
+  switch(currentAlarm) {
 
     case IOT_EVENT_BACKUP:
         beepAlarm(BEEP_PERIOD_BACKUP, lastBeepBackup, beepBackupActivated);
@@ -77,7 +81,7 @@ void soundAlarm(int alarmEventId) {
 }
 
 void stopAlarm() {
-    alarmEvent = 0;
+    currentAlarm = IOT_EVENT_NONE;
     lastBeepBadState =
     lastBeepFlood =
     lastBeepBackup = 0;
@@ -87,7 +91,7 @@ void stopAlarm() {
 }
 
 bool checkAlarm() {
-    return alarmEvent > 0;
+    return currentAlarm > IOT_EVENT_NONE;
 }
 
 void testAlarm() {
