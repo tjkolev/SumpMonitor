@@ -14,7 +14,7 @@ void beepPattern(int beepCount, int beepLengthMs, int restMs) {
 
   digitalWrite(LED_RED_PIN, 0); //on
 
-  for(int n = 0; n < beepCount - 1; n++) {
+  for(int n = 0; n < beepCount; n++) {
     if(n > 0) {
       delay(restMs);
     }
@@ -25,17 +25,17 @@ void beepPattern(int beepCount, int beepLengthMs, int restMs) {
 }
 
 void beepBadState() {
-  beepPattern(2, 400, 100);
+  beepPattern(2, 400, 200);
 }
 
 
 void beepFlood() {
-  beepPattern(3, 600, 100);
+  beepPattern(5, 200, 100);
 }
 
 
 void beepBackupActivated() {
-  beepPattern(3, 300, 100);
+  beepPattern(3, 300, 200);
 }
 
 void beepAlarm(unsigned long beepInterval, unsigned long &lastBeep, std::function<void(void)> beepRoutine) {
