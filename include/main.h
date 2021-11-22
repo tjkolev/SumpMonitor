@@ -3,37 +3,43 @@
 
 #include <sensitive.h>
 
-#define FLOAT_UNKNOWN (-1)
-#define FLOAT_NONE 0
-#define FLOAT_SUMP 1
-#define FLOAT_BACKUP 2
-#define FLOAT_FAIL 3
-#define FLOAT_COUNT (FLOAT_FAIL+1)
+#define SUMP_MONITOR_VERSION  "21.11.21.0"
 
-#define IOT_EVENT_DRY 0
-#define IOT_EVENT_SUMP 1
-#define IOT_EVENT_BACKUP 2
-#define IOT_EVENT_FLOOD 3
-#define IOT_EVENT_RESET 4
+// Events in order of severity
+#define IOT_EVENT_NONE        0
+#define IOT_EVENT_DRY         1
+#define IOT_EVENT_RESET       2
+#define IOT_EVENT_SUMP        3
+#define IOT_EVENT_BAD_STATE   4
+#define IOT_EVENT_BACKUP      5
+#define IOT_EVENT_FLOOD       6
 
-#define IOT_API_BASE_URL "http://" ROUTER_IP "/cgi-bin/luci/iot-helper/api"
+#define IOT_API_BASE_URL "http://" IOT_SERVICE_FQDN "/cgi-bin/luci/iot-helper/api"
 
-struct ConfigParams {
+struct ApplicationConfig {
   unsigned long MainLoopMs = 1 * 1000; // every second
-  unsigned long UpdateConfigMs = 1 * 60 * 1000;
-  unsigned long LevelCheckMs = 5 * 1000;
-  unsigned char DebounceMask = 0x07; // Successive positive readings as bits (111)
-  unsigned long FloatBackupNotifyPeriodMs = 20 * 60 * 1000; // 20 minutes
-  unsigned long FloatFailNotifyPeriodMs = 5 * 60 * 1000; // 5 minutes
-  unsigned long SumpThresholdNotifyMs = 6 * 60 * 60 * 1000; // 6 hours
+  unsigned long UpdateConfigMs = 5 * 60 * 1000; // every 5 minutes
+  byte DebounceMask = 0x07; // Successive readings as bits (111) or (000) to confirm float's state.
+  unsigned long MinNotifyPeriodMs = 15 * 60 * 1000; // 15 minutes
   unsigned long DryAgeNotifyMs = 12 * 60 * 60 * 1000; // 12 hours
-
-  int FloatRangeValues[FLOAT_COUNT][2] = {
-    { 0, 60 },
-    { 200, 400 },
-    { 480, 600 },
-    { 800, 1024 }
-  };
+  unsigned long MaxPumpRunTimeMs = 2 * 60 * 1000; // 2 minutes
+  unsigned long PumpTestRunMs = 3 * 1000; // 3 seconds
 };
+
+extern ApplicationConfig AppConfig;
+
+#define TXT_BUFF_LEN 400
+extern char textBuffer[TXT_BUFF_LEN];
+void log(const char* format, ...);
+//# define log(FormatLiteral, ...)  Serial.printf ("%lu " FormatLiteral "\n", millis(), ##__VA_ARGS__)
+
+bool ensureWiFi();
+bool wifiConnected();
+bool updateConfig();
+void soundAlarm(int alarmEvent = IOT_EVENT_NONE);
+void stopAlarm();
+bool checkAlarm();
+void testAlarm();
+bool sendNotification(int eventId, char* msg = NULL, int msgLen = 0);
 
 #endif // main_h

@@ -1,254 +1,295 @@
 #include <Arduino.h>
-#include <ArduinoJson.h>
-#include <ESP8266WiFi.h>
-#include <ESP8266HTTPClient.h>
 #include <main.h>
+#include <pins.h>
 
-const char* floatNames[] = {
-  "Level-Dry",
-  "Level-SumpPump",
-  "Level-BackupPump",
-  "Level-Flood"
+#define FLOAT_LEVEL_SUMP    0
+#define FLOAT_LEVEL_BACKUP  1
+#define FLOAT_LEVEL_FLOOD   2
+#define FLOAT_LEVEL_COUNT   (FLOAT_LEVEL_FLOOD + 1)
+
+enum ExecutionMode {
+  Initializing,
+  Monitoring,
+  Pumping,
+  Resting,
+};
+ExecutionMode execMode = Initializing;
+
+bool testButtonPressed = false;
+bool enableOnButtonPress = false;
+IRAM_ATTR void onButtonPress() {
+  if(enableOnButtonPress) {
+    testButtonPressed = true;
+  }
+}
+
+char textBuffer[TXT_BUFF_LEN];
+void log(const char* format, ...)
+{
+  va_list args;
+  va_start(args, format);
+
+  snprintf(textBuffer, TXT_BUFF_LEN, "%lu ", millis());
+  size_t txtLen = strlen(textBuffer);
+  vsnprintf(textBuffer + txtLen, TXT_BUFF_LEN - txtLen, format, args);
+
+  va_end(args);
+  Serial.println(textBuffer);
+}
+
+void setupIO() {
+
+  pinMode(FLOAT_SUMP_PIN, INPUT_PULLUP);
+  pinMode(FLOAT_BACKUP_PIN, INPUT_PULLUP);
+  pinMode(FLOAT_FLOOD_PIN, INPUT_PULLUP);
+
+  pinMode(RELAY_PUMP_PIN, OUTPUT);
+  pinMode(BUZZER_PIN, OUTPUT);
+
+  pinMode(LED_BLUE_PIN, OUTPUT);
+  digitalWrite(LED_BLUE_PIN, 1); // off
+  pinMode(LED_RED_PIN, OUTPUT);
+  digitalWrite(LED_RED_PIN, 1); // off
+
+  pinMode(BUTTON_TEST_PIN, INPUT);
+  attachInterrupt(digitalPinToInterrupt(BUTTON_TEST_PIN), onButtonPress, RISING);
+}
+
+struct FloatData {
+  byte Pin;
+  byte DebounceBits = 0x00;
+  bool State = 0;
+  bool LoggedState = 0;
+
+  bool stateChanged() {
+    return State != LoggedState;
+  }
+
+  void logState() {
+    LoggedState = State;
+  }
 };
 
-ConfigParams configParams;
+#define FLOAT_COUNT   3
+FloatData floats[FLOAT_COUNT] = {
+  { .Pin = FLOAT_SUMP_PIN },
+  { .Pin = FLOAT_BACKUP_PIN },
+  { .Pin = FLOAT_FLOOD_PIN },
+};
 
-const char* getLevelName(int floatId) {
-  if(FLOAT_NONE <= floatId && floatId <= FLOAT_FAIL) {
-    return floatNames[floatId];
-  }
-  return "Level-Unknown";
+#define TXT_FLOAT_STATE_LEN   12
+char floatsState[TXT_FLOAT_STATE_LEN];
+char* getFloatsState() {
+  snprintf(floatsState, TXT_FLOAT_STATE_LEN, "[%d %d %d]",
+      floats[FLOAT_LEVEL_SUMP].State, floats[FLOAT_LEVEL_BACKUP].State, floats[FLOAT_LEVEL_FLOOD].State);
+  return floatsState;
 }
 
-unsigned char floatDebounceBits[FLOAT_COUNT] = { 0x00, 0x00, 0x00, 0x00 };
+byte inverseDebounceMask = ~AppConfig.DebounceMask;
 
-int floatCheck() {
-  int rawVal = analogRead(PIN_A0);
-  Serial.print(millis()/1000);Serial.print(" pin_A0: ");Serial.println(rawVal);
+void checkFloat(int floatLevel) {
+  FloatData& fdata = floats[floatLevel];
+  fdata.DebounceBits = fdata.DebounceBits << 1;
+  int pinVal = digitalRead(fdata.Pin);
+  if(pinVal == 0) {
+    // Pin is pulled up. Will read 0 when float switch is on.
+    fdata.DebounceBits += 1;
+  }
 
-  int floatId = FLOAT_UNKNOWN;
-  bool rangeMatch = false;
-  for(int floatNdx = 0; floatNdx < FLOAT_COUNT; floatNdx++) {
-    floatDebounceBits[floatNdx] = (floatDebounceBits[floatNdx] << 1);
-    if(configParams.FloatRangeValues[floatNdx][0] <= rawVal && rawVal <= configParams.FloatRangeValues[floatNdx][1]) {
-      rangeMatch = true;
-      floatDebounceBits[floatNdx] += 1;
-      if(configParams.DebounceMask == (floatDebounceBits[floatNdx] & configParams.DebounceMask)) {
-        floatId = floatNdx;
-      }
+  // So many consequtive times the switch was read as ON.
+  if(AppConfig.DebounceMask == (fdata.DebounceBits & AppConfig.DebounceMask)) {
+    fdata.State = true;
+  }
+
+  // So many consequtive times the switch was read as OFF.
+  if(inverseDebounceMask == (fdata.DebounceBits | inverseDebounceMask)) {
+    fdata.State = false;
+  }
+
+  return;
+}
+
+bool verifyFloatsState() {
+  for(int lvl = FLOAT_LEVEL_COUNT - 1; lvl > 0; lvl--) {
+    if(floats[lvl].State && !floats[lvl-1].State) {
+      return false;
     }
   }
-
-  if(!rangeMatch) {
-    Serial.print("No level range match for: "); Serial.println(rawVal);
-  }
-
-  return floatId;
+  return true;
 }
 
-int currentFloat = FLOAT_UNKNOWN;
-unsigned long currentFloatSinceTime = 0;
-unsigned long nextLevelCheckTime = 0;
+unsigned long pumpStarted = 0;
 
-bool checkWifi() {
-  return WiFi.status() == WL_CONNECTED;
-}
+void drivePump() {
 
-HTTPClient httpClient;
-void sendNotification(int eventId) {
-  if(!checkWifi()) {
-    Serial.println("Cannot notify: no wifi.");
+  // Water too high. Need to start pumping.
+  if(floats[FLOAT_LEVEL_BACKUP].State || floats[FLOAT_LEVEL_FLOOD].State) {
+    digitalWrite(RELAY_PUMP_PIN, 1); // Doesn't hurt to assert we need to pump.
+    if(execMode != Pumping) {
+      pumpStarted = millis();
+      int eventId = floats[FLOAT_LEVEL_BACKUP].State ? IOT_EVENT_BACKUP : IOT_EVENT_FLOOD;
+      soundAlarm(eventId);
+      sendNotification(eventId);
+    }
+    execMode = Pumping;
     return;
   }
 
-  httpClient.setTimeout(10000);
-  switch(eventId){
-    case IOT_EVENT_DRY:
-      httpClient.begin(IOT_API_BASE_URL "/notify?eventid=sump_dry");
-      break;
-    case IOT_EVENT_SUMP:
-      httpClient.begin(IOT_API_BASE_URL "/notify?eventid=sump_sump");
-      break;
-    case IOT_EVENT_BACKUP:
-      httpClient.begin(IOT_API_BASE_URL "/notify?eventid=sump_backup");
-      break;
-    case IOT_EVENT_FLOOD:
-      httpClient.begin(IOT_API_BASE_URL "/notify?eventid=sump_flood");
-      break;
-    case IOT_EVENT_RESET:
-      httpClient.begin(IOT_API_BASE_URL "/notify?eventid=sump_reset");
-      break;
-    
-    default:
-      return;
+  // Until the sump level float is off.
+  if(!floats[FLOAT_LEVEL_SUMP].State) {
+    if(execMode != Monitoring) {
+      stopAlarm();
+    }
+    digitalWrite(RELAY_PUMP_PIN, 0);
+    execMode = Monitoring;
+    pumpStarted = 0;
+    return;
   }
 
-  int code = httpClient.POST(NULL, 0);
-  if(code == 200){
-    Serial.println("Notification sent.");
+  // We end up here if the water leve is above sump but below backup level.
+  // If we've been pumping for too long - give the pump a break. If the water
+  // reaches backup level pump will start again unconditionally.
+  if(execMode == Pumping) {
+    if(pumpStarted + AppConfig.MaxPumpRunTimeMs < millis()) {
+      log("Giving the pump some rest.");
+      digitalWrite(RELAY_PUMP_PIN, 0);
+      execMode = Monitoring;
+      pumpStarted = 0;
+    }
+  }
+
+}
+
+void testPump() {
+  digitalWrite(RELAY_PUMP_PIN, 1);
+  delay(AppConfig.PumpTestRunMs);
+  digitalWrite(RELAY_PUMP_PIN, 0);
+}
+
+bool floatStateChanged() {
+  return floats[FLOAT_LEVEL_SUMP].stateChanged()
+    | floats[FLOAT_LEVEL_BACKUP].stateChanged()
+    | floats[FLOAT_LEVEL_FLOOD].stateChanged();
+}
+
+void logFloatsState() {
+
+  if(floatStateChanged()) {
+    log("Floats state: %s", getFloatsState());
+
+    floats[FLOAT_LEVEL_SUMP].logState();
+    floats[FLOAT_LEVEL_BACKUP].logState();
+    floats[FLOAT_LEVEL_FLOOD].logState();
+  }
+}
+
+unsigned long sumpLevel_LastOnTime = 0;
+unsigned long sumpLevel_LastOffTime = 0;
+bool trackDryPeriod = false;
+
+void checkAllFloats() {
+
+  for(int lvl = 0; lvl < FLOAT_LEVEL_COUNT; lvl++) {
+    checkFloat(lvl);
+  }
+
+  if(!verifyFloatsState()) {
+    int msgLen = snprintf(textBuffer, TXT_BUFF_LEN, "Invalid floats state: %s.", getFloatsState());
+    sendNotification(IOT_EVENT_BAD_STATE, textBuffer, msgLen);
+    soundAlarm(IOT_EVENT_BAD_STATE);
+  }
+
+  unsigned long now = millis();
+  if(floats[FLOAT_LEVEL_SUMP].State) {
+    sumpLevel_LastOnTime =
+    sumpLevel_LastOffTime = now; // Move up (reset) the off time to avoid millis overflow issues.
+    if(!trackDryPeriod) {
+      trackDryPeriod = true;
+      sendNotification(IOT_EVENT_SUMP);
+    }
   }
   else {
-    Serial.print("Failed to send notification. Http code ");Serial.println(code);
+    sumpLevel_LastOffTime = now;
   }
-  httpClient.end();
+
+  if(trackDryPeriod && (sumpLevel_LastOnTime + AppConfig.DryAgeNotifyMs < sumpLevel_LastOffTime)) {
+    sendNotification(IOT_EVENT_DRY);
+    trackDryPeriod = false;
+  }
+
+  drivePump();
+
+  logFloatsState();
 }
 
-void parseConfig(const char* json) {
-  StaticJsonBuffer<1024> jsonBuffer;
-  JsonObject& config = jsonBuffer.parseObject(json);
-  if (!config.success()) {
-    Serial.println("Failed to parse json.");
-    return;
-  }
-
-  unsigned int pval;
-  if ((pval = config["MainLoopSec"])) configParams.MainLoopMs = pval * 1000;
-  if ((pval = config["UpdateConfigSec"])) configParams.UpdateConfigMs = pval * 1000;
-  if ((pval = config["LevelCheckSec"])) configParams.LevelCheckMs = pval * 1000;
-  if ((pval = config["DebounceMask"])) configParams.DebounceMask = (unsigned char) pval;
-  if ((pval = config["FloatBackupNotifyPeriodSec"])) configParams.FloatBackupNotifyPeriodMs = pval * 1000;
-  if ((pval = config["FloatFailNotifyPeriodSec"])) configParams.FloatFailNotifyPeriodMs = pval * 1000;
-  if ((pval = config["SumpThresholdNotifySec"])) configParams.SumpThresholdNotifyMs = pval * 1000;
-  if ((pval = config["DryAgeNotifySec"])) configParams.DryAgeNotifyMs = pval * 1000;
-
-  char lvlx[] = "Level_";
-  for(int fl = FLOAT_NONE; fl < FLOAT_COUNT; fl++) {
-    lvlx[5] = (char) (fl + 48);
-    if (config.containsKey(lvlx)) {
-      configParams.FloatRangeValues[fl][0] = config[lvlx][0];
-      configParams.FloatRangeValues[fl][1] = config[lvlx][1];
-    }
-  }
-
-  Serial.println("Configuration updated from json.");
+void runTest() {
+  testAlarm();
+  testPump();
 }
 
-unsigned long nextUpdateConfigMs = 0;
-void updateConfig() {
-  if(millis() < nextUpdateConfigMs) {
-    return;
-  }
+void checkButtonPress() {
 
-  if(checkWifi()) {
-    httpClient.setTimeout(10000);
-    httpClient.begin(IOT_API_BASE_URL "/config?deviceid=sump");
-    int code = httpClient.GET();
-    if(code == 200) {
-      String body = httpClient.getString();
-      parseConfig(body.c_str());
+  if(testButtonPressed) {
+    bool alarmOn = checkAlarm();
+    log("Button was pressed - %s", (alarmOn ? "Stopping alarm." : "Running test."));
+    if(alarmOn) {
+      stopAlarm();
     }
     else {
-      Serial.print("Cannot pull config. Http code ");Serial.println(code);
-    }
-    httpClient.end();
-  }
-  else {
-    Serial.println("Cannot pull config: no wifi.");
-  }
-
-  nextUpdateConfigMs = millis() + configParams.UpdateConfigMs;
-  Serial.print("Next config update: ");Serial.println(nextUpdateConfigMs / 1000);
-}
-
-unsigned long nextFloatFailNotify = 0;
-unsigned long nextFloatBackupNotify = 0;
-bool sumpNotifySuspended = true;
-bool dryNotifySuspended = true;
-
-void onFloatCheck(int topFloat) {
-  // Serial.print("sec: ");Serial.println(millis()/1000);
-  // Serial.print("topFloat: ");Serial.println(getLevelName(topFloat));
-  // Serial.print("currentFloat: ");Serial.println(getLevelName(currentFloat));
-
-  if(topFloat > FLOAT_NONE) {
-    sumpNotifySuspended = dryNotifySuspended = false;
-  }
-
-  // Notifications from most to least critical.
-  if(FLOAT_FAIL == topFloat) {
-    // Flooding imminent
-    if(millis() > nextFloatFailNotify) {
-      sendNotification(IOT_EVENT_FLOOD);
-      nextFloatFailNotify = millis() + configParams.FloatFailNotifyPeriodMs;
-    }
-    return;
-  }
-
-  if(FLOAT_BACKUP == topFloat) {
-    // Backup activated.
-    if(millis() > nextFloatBackupNotify) {
-      sendNotification(IOT_EVENT_BACKUP);
-      nextFloatBackupNotify = millis() + configParams.FloatBackupNotifyPeriodMs;
-    }
-    return;
-  }
-
-  // At dry level.
-  if(FLOAT_NONE == currentFloat) {
-    if(!sumpNotifySuspended && (FLOAT_SUMP == topFloat) && (millis() - currentFloatSinceTime > configParams.SumpThresholdNotifyMs)) {
-      // been dry for some time, and now water at sump level
-      sendNotification(IOT_EVENT_SUMP);
-      sumpNotifySuspended = true;
-      return;
-    }
-    if(!dryNotifySuspended && (millis() - currentFloatSinceTime > configParams.DryAgeNotifyMs)) {
-      // notify it's considered dry
-      sendNotification(IOT_EVENT_DRY);
-      dryNotifySuspended = true;
-      return;
+      runTest();
     }
   }
-}
 
-void checkWaterLevel() {
-  if(millis() < nextLevelCheckTime) {
-    return;
-  }
-
-  int topFloat = floatCheck();
-  onFloatCheck(topFloat);
-
-  if(FLOAT_UNKNOWN != topFloat && topFloat != currentFloat) {
-    currentFloat = topFloat;
-    currentFloatSinceTime = millis();
-  }
-
-  nextLevelCheckTime = millis() + (dryNotifySuspended ? configParams.LevelCheckMs : configParams.MainLoopMs);
+  testButtonPressed = false;
 }
 
 void setup() {
   // put your setup code here, to run once:
-  Serial.begin(115200);		 // Start the Serial communication to send messages to the computer
-	delay(10);
-	Serial.println('\n');
+  Serial.begin(115200); // Start the Serial communication to send messages to the computer
+  delay(10);
 
-  Serial.println("Setting up Wifi.");
-  WiFi.persistent(false);
-  WiFi.mode(WIFI_OFF);
-  WiFi.mode(WIFI_STA);
-  IPAddress ip(NETWORK_IP);
-  IPAddress gateway(NETWORK_GATEWAY);
-  IPAddress subnet(NETWORK_SUBNET);
-  WiFi.config(ip, gateway, subnet);
-  WiFi.begin(WIFI_NETWORK, WIFI_PASSWORD);
-  delay(60 * 1000);
-  Serial.println("Setup done.");
+  log("\nSetting up...");
+
+  setupIO();
+  ensureWiFi();
+
+  updateConfig();
+
+  execMode = Monitoring;
+
+  log("Ready. Version: " SUMP_MONITOR_VERSION);
 }
 
+unsigned long lastLoopRun = 0;
 bool resetNotificationSent = false;
-unsigned long nextLoopMs = 0;
+bool flipBlueLed = false;
 void loop() {
-  // put your main code here, to run repeatedly:
-  if(millis() >= nextLoopMs)
-  {
+
+  if(lastLoopRun + AppConfig.MainLoopMs < millis()) {
+
     if(!resetNotificationSent) {
-      sendNotification(IOT_EVENT_RESET);
-      resetNotificationSent = true;
+      // Here because sometimes wifi is not ready in startup.
+      resetNotificationSent = sendNotification(IOT_EVENT_RESET);
     }
 
-    updateConfig();
-    checkWaterLevel();
-    nextLoopMs = millis() + configParams.MainLoopMs;
+    if(updateConfig()) {
+      inverseDebounceMask = ~AppConfig.DebounceMask;
+    }
+
+    checkButtonPress();
+
+    checkAllFloats(); // Gist of the work.
+
+    soundAlarm(); // Keeps the alarms going on if needed.
+
+    enableOnButtonPress = true;
+
+    if(wifiConnected()) {
+      digitalWrite(LED_BLUE_PIN, flipBlueLed ? 0 : 1);
+      flipBlueLed = !flipBlueLed;
+    }
+
+    lastLoopRun = millis();
   }
 
   yield();
