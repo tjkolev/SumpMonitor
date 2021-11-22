@@ -256,6 +256,8 @@ void setup() {
   updateConfig();
 
   execMode = Monitoring;
+
+  log("Ready. Version: " SUMP_MONITOR_VERSION);
 }
 
 unsigned long lastLoopRun = 0;

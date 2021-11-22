@@ -3,6 +3,8 @@
 
 #include <sensitive.h>
 
+#define SUMP_MONITOR_VERSION  "21.11.21.0"
+
 // Events in order of severity
 #define IOT_EVENT_NONE        0
 #define IOT_EVENT_DRY         1
@@ -16,11 +18,11 @@
 
 struct ApplicationConfig {
   unsigned long MainLoopMs = 1 * 1000; // every second
-  unsigned long UpdateConfigMs = 1 * 60 * 1000;
+  unsigned long UpdateConfigMs = 5 * 60 * 1000; // every 5 minutes
   byte DebounceMask = 0x07; // Successive readings as bits (111) or (000) to confirm float's state.
   unsigned long MinNotifyPeriodMs = 15 * 60 * 1000; // 15 minutes
   unsigned long DryAgeNotifyMs = 12 * 60 * 60 * 1000; // 12 hours
-  unsigned long MaxPumpRunTimeMs = 3 * 60 * 1000; // 3 minutes
+  unsigned long MaxPumpRunTimeMs = 2 * 60 * 1000; // 2 minutes
   unsigned long PumpTestRunMs = 3 * 1000; // 3 seconds
 };
 
