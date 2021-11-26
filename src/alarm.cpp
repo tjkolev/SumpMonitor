@@ -40,7 +40,7 @@ void beepBackupActivated() {
 
 void beepAlarm(unsigned long beepInterval, unsigned long &lastBeep, std::function<void(void)> beepRoutine) {
   unsigned long now = millis();
-  if(lastBeep + beepInterval > now)
+  if(now - lastBeep < beepInterval)
   {
     return;
   }

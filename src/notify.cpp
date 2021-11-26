@@ -86,7 +86,7 @@ char jsonText[JSON_BUFFER_SIZE];
 bool sendNotification(int eventId, char* msg, int msgLen) {
 
   unsigned long now = millis();
-  if((eventId == lastNotifiedEventId) && (lastNotifyTime + AppConfig.MinNotifyPeriodMs > now)) {
+  if((eventId == lastNotifiedEventId) && (now - lastNotifyTime < AppConfig.MinNotifyPeriodMs)) {
     return true;
   }
   lastNotifyTime = now;

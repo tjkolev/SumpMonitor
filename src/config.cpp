@@ -49,7 +49,7 @@ bool parseConfig(const char* json) {
 unsigned long lastConfigUpdate = 0;
 bool updateConfig() {
   unsigned long now = millis();
-  if(lastConfigUpdate + AppConfig.UpdateConfigMs > now) {
+  if(now - lastConfigUpdate < AppConfig.UpdateConfigMs) {
     return false;
   }
   lastConfigUpdate = now;

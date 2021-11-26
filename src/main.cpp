@@ -150,7 +150,7 @@ void drivePump() {
   // If we've been pumping for too long - give the pump a break. If the water
   // reaches backup level pump will start again unconditionally.
   if(execMode == Pumping) {
-    if(pumpStarted + AppConfig.MaxPumpRunTimeMs < millis()) {
+    if(millis() - pumpStarted >= AppConfig.MaxPumpRunTimeMs) {
       log("Giving the pump some rest.");
       digitalWrite(RELAY_PUMP_PIN, 0);
       execMode = Monitoring;
@@ -265,7 +265,7 @@ bool resetNotificationSent = false;
 bool flipBlueLed = false;
 void loop() {
 
-  if(lastLoopRun + AppConfig.MainLoopMs < millis()) {
+  if(millis() - lastLoopRun > AppConfig.MainLoopMs) {
 
     if(!resetNotificationSent) {
       // Here because sometimes wifi is not ready in startup.

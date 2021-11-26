@@ -31,7 +31,6 @@ extern ApplicationConfig AppConfig;
 #define TXT_BUFF_LEN 400
 extern char textBuffer[TXT_BUFF_LEN];
 void log(const char* format, ...);
-//# define log(FormatLiteral, ...)  Serial.printf ("%lu " FormatLiteral "\n", millis(), ##__VA_ARGS__)
 
 bool ensureWiFi();
 bool wifiConnected();
