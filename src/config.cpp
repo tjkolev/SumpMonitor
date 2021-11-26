@@ -11,57 +11,56 @@ ApplicationConfig AppConfig;
 #define CONFIG_URL    IOT_API_BASE_URL "/config?deviceid=sump"
 
 template <typename T>
-bool updateValue(unsigned int newValue, T &currentValue, int multiplier = 1000) {
-  if (newValue) {
-    T cfgValue = newValue * multiplier;
-    if(cfgValue != currentValue) {
-      currentValue = cfgValue;
-      return true;
-    }
+void updateValue(const JsonObject &jconfig, const char* key, T &currentValue, int multiplier) {
+  if (jconfig.containsKey(key)) {
+    currentValue = jconfig[key].as<T>() * multiplier;
   }
-  return false;
 }
 
-bool parseConfig(const char* json) {
+template <typename T>
+void updateValue(const JsonObject &jconfig, const char* key, T &currentValue) {
+  if (jconfig.containsKey(key)) {
+    currentValue = jconfig[key].as<T>();
+  }
+}
+
+void parseConfig(const char* json) {
   StaticJsonBuffer<1024> jsonBuffer;
   JsonObject& config = jsonBuffer.parseObject(json);
   if (!config.success()) {
     log("Failed to parse json:\n%s", json);
-    return false;
   }
 
-  bool updated = updateValue(config["MainLoopSec"], AppConfig.MainLoopMs);
-  updated |= updateValue(config["UpdateConfigSec"], AppConfig.UpdateConfigMs);
-  updated |= updateValue(config["DebounceMask"], AppConfig.DebounceMask, 1);
-  updated |= updateValue(config["MinNotifyPeriodSec"], AppConfig.MinNotifyPeriodMs);
-  updated |= updateValue(config["DryAgeNotifySec"], AppConfig.DryAgeNotifyMs);
-  updated |= updateValue(config["MaxPumpRunTimeSec"], AppConfig.MaxPumpRunTimeMs);
-  updated |= updateValue(config["PumpTestRunSec"], AppConfig.PumpTestRunMs);
+  updateValue(config, "MainLoopSec", AppConfig.MainLoopMs, 1000);
+  updateValue(config, "UpdateConfigSec", AppConfig.UpdateConfigMs, 1000);
+  updateValue(config, "DebounceMask", AppConfig.DebounceMask);
+  updateValue(config, "MinNotifyPeriodSec", AppConfig.MinNotifyPeriodMs, 1000);
+  updateValue(config, "DryAgeNotifySec", AppConfig.DryAgeNotifyMs, 1000);
+  updateValue(config, "MaxPumpRunTimeSec", AppConfig.MaxPumpRunTimeMs, 1000);
+  updateValue(config, "PumpTestRunSec", AppConfig.PumpTestRunMs, 1000);
+  updateValue(config, "DebugLog", AppConfig.DebugLog);
 
-  log("Configuration pulled from %s - %s", CONFIG_URL, (updated ? "updated:": "no changes."));
-  if(updated) {
-    log(json);
-  }
+  AppConfig.inverseDebounceMask = ~AppConfig.DebounceMask;
 
-  return updated;
+  log("Configuration pulled from %s", CONFIG_URL);
+  log(json);
 }
 
 unsigned long lastConfigUpdate = 0;
-bool updateConfig() {
+void updateConfig(bool force) {
   unsigned long now = millis();
-  if(now - lastConfigUpdate < AppConfig.UpdateConfigMs) {
-    return false;
+  if(!force && (now - lastConfigUpdate < AppConfig.UpdateConfigMs)) {
+    return;
   }
   lastConfigUpdate = now;
 
-  bool result = false;
   if(ensureWiFi()) {
     httpClient.setTimeout(10000);
     httpClient.begin(wifiClient, CONFIG_URL);
     int code = httpClient.GET();
     if(code == 200) {
       String body = httpClient.getString();
-      result = parseConfig(body.c_str());
+      parseConfig(body.c_str());
     }
     else {
       log("Cannot pull config. Http code %d", code);
@@ -72,5 +71,4 @@ bool updateConfig() {
    log("Cannot pull config: no wifi.");
   }
 
-  return result;
 }

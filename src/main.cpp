@@ -11,7 +11,6 @@ enum ExecutionMode {
   Initializing,
   Monitoring,
   Pumping,
-  Resting,
 };
 ExecutionMode execMode = Initializing;
 
@@ -23,18 +22,43 @@ IRAM_ATTR void onButtonPress() {
   }
 }
 
-char textBuffer[TXT_BUFF_LEN];
-void log(const char* format, ...)
+char* formatMillis(char* buff, unsigned long milliseconds) {
+  // returns the millisconds formatted as d.hh:mm:ss.lll
+  unsigned long tmillis = milliseconds;
+  int msecs = (int) (tmillis % 1000);
+
+  unsigned long tsecs;
+  int secs = (int)((tsecs = tmillis / 1000) % 60);
+
+  unsigned long tmins;
+  int mins = (int)((tmins = tsecs / 60) % 60);
+
+  unsigned long thours;
+  int hours = (int)((thours = tmins / 60) % 24);
+
+  int days = (int)(thours / 24);
+
+  sprintf(buff, "%d.%02d:%02d:%02d.%03d", days, hours, mins, secs, msecs);
+  return buff;
+}
+
+#define LOG_BUFF_LEN 600
+char logMsgBuffer[LOG_BUFF_LEN];
+char millisFmtBuffer[24];
+const char* log(const char* format, ...)
 {
   va_list args;
   va_start(args, format);
 
-  snprintf(textBuffer, TXT_BUFF_LEN, "%lu ", millis());
-  size_t txtLen = strlen(textBuffer);
-  vsnprintf(textBuffer + txtLen, TXT_BUFF_LEN - txtLen, format, args);
+  size_t txtLen;
+
+  txtLen = snprintf(logMsgBuffer, LOG_BUFF_LEN, "%s ", formatMillis(millisFmtBuffer, millis()));
+  vsnprintf(logMsgBuffer + txtLen, LOG_BUFF_LEN - txtLen, format, args);
 
   va_end(args);
-  Serial.println(textBuffer);
+  Serial.println(logMsgBuffer);
+
+  return logMsgBuffer;
 }
 
 void setupIO() {
@@ -58,15 +82,15 @@ void setupIO() {
 struct FloatData {
   byte Pin;
   byte DebounceBits = 0x00;
-  bool State = 0;
+  bool On = 0;
   bool LoggedState = 0;
 
   bool stateChanged() {
-    return State != LoggedState;
+    return On != LoggedState;
   }
 
   void logState() {
-    LoggedState = State;
+    LoggedState = On;
   }
 };
 
@@ -77,11 +101,11 @@ FloatData floats[FLOAT_COUNT] = {
   { .Pin = FLOAT_FLOOD_PIN },
 };
 
-#define TXT_FLOAT_STATE_LEN   12
+#define TXT_FLOAT_STATE_LEN   16
 char floatsState[TXT_FLOAT_STATE_LEN];
 char* getFloatsState() {
   snprintf(floatsState, TXT_FLOAT_STATE_LEN, "[%d %d %d]",
-      floats[FLOAT_LEVEL_SUMP].State, floats[FLOAT_LEVEL_BACKUP].State, floats[FLOAT_LEVEL_FLOOD].State);
+      floats[FLOAT_LEVEL_SUMP].On, floats[FLOAT_LEVEL_BACKUP].On, floats[FLOAT_LEVEL_FLOOD].On);
   return floatsState;
 }
 
@@ -98,20 +122,24 @@ void checkFloat(int floatLevel) {
 
   // So many consequtive times the switch was read as ON.
   if(AppConfig.DebounceMask == (fdata.DebounceBits & AppConfig.DebounceMask)) {
-    fdata.State = true;
+    fdata.On = true;
   }
 
   // So many consequtive times the switch was read as OFF.
   if(inverseDebounceMask == (fdata.DebounceBits | inverseDebounceMask)) {
-    fdata.State = false;
+    fdata.On = false;
   }
 
   return;
 }
 
 bool verifyFloatsState() {
+  snprintf(floatsState, TXT_FLOAT_STATE_LEN, "[%d %d %d]",
+    floats[FLOAT_LEVEL_SUMP].DebounceBits, floats[FLOAT_LEVEL_BACKUP].DebounceBits, floats[FLOAT_LEVEL_FLOOD].DebounceBits);
+  logd("Debounce bits: %s", floatsState);
+
   for(int lvl = FLOAT_LEVEL_COUNT - 1; lvl > 0; lvl--) {
-    if(floats[lvl].State && !floats[lvl-1].State) {
+    if(floats[lvl].On && !floats[lvl-1].On) {
       return false;
     }
   }
@@ -123,11 +151,11 @@ unsigned long pumpStarted = 0;
 void drivePump() {
 
   // Water too high. Need to start pumping.
-  if(floats[FLOAT_LEVEL_BACKUP].State || floats[FLOAT_LEVEL_FLOOD].State) {
+  if(floats[FLOAT_LEVEL_BACKUP].On || floats[FLOAT_LEVEL_FLOOD].On) {
     digitalWrite(RELAY_PUMP_PIN, 1); // Doesn't hurt to assert we need to pump.
     if(execMode != Pumping) {
       pumpStarted = millis();
-      int eventId = floats[FLOAT_LEVEL_BACKUP].State ? IOT_EVENT_BACKUP : IOT_EVENT_FLOOD;
+      int eventId = floats[FLOAT_LEVEL_BACKUP].On ? IOT_EVENT_BACKUP : IOT_EVENT_FLOOD;
       soundAlarm(eventId);
       sendNotification(eventId);
     }
@@ -136,7 +164,7 @@ void drivePump() {
   }
 
   // Until the sump level float is off.
-  if(!floats[FLOAT_LEVEL_SUMP].State) {
+  if(!floats[FLOAT_LEVEL_SUMP].On) {
     if(execMode != Monitoring) {
       stopAlarm();
     }
@@ -183,9 +211,8 @@ void logFloatsState() {
   }
 }
 
-unsigned long sumpLevel_LastOnTime = 0;
 unsigned long sumpLevel_LastOffTime = 0;
-bool trackDryPeriod = false;
+bool sumpConsideredDry = true;
 
 void checkAllFloats() {
 
@@ -194,27 +221,22 @@ void checkAllFloats() {
   }
 
   if(!verifyFloatsState()) {
-    int msgLen = snprintf(textBuffer, TXT_BUFF_LEN, "Invalid floats state: %s.", getFloatsState());
-    sendNotification(IOT_EVENT_BAD_STATE, textBuffer, msgLen);
+    const char* logmsg = log("Invalid floats state: %s.", getFloatsState());
+    sendNotification(IOT_EVENT_BAD_STATE, logmsg, -1);
     soundAlarm(IOT_EVENT_BAD_STATE);
   }
 
-  unsigned long now = millis();
-  if(floats[FLOAT_LEVEL_SUMP].State) {
-    sumpLevel_LastOnTime =
-    sumpLevel_LastOffTime = now; // Move up (reset) the off time to avoid millis overflow issues.
-    if(!trackDryPeriod) {
-      trackDryPeriod = true;
-      sendNotification(IOT_EVENT_SUMP);
-    }
+  // figure out when to call the sump dry
+  if(sumpConsideredDry && floats[FLOAT_LEVEL_SUMP].On && floats[FLOAT_LEVEL_SUMP].stateChanged()) {
+    sumpConsideredDry = false;
+    sendNotification(IOT_EVENT_SUMP);
   }
-  else {
-    sumpLevel_LastOffTime = now;
-  }
-
-  if(trackDryPeriod && (sumpLevel_LastOnTime + AppConfig.DryAgeNotifyMs < sumpLevel_LastOffTime)) {
+  if(!sumpConsideredDry && !floats[FLOAT_LEVEL_SUMP].On && !floats[FLOAT_LEVEL_SUMP].stateChanged() && (millis() - sumpLevel_LastOffTime > AppConfig.DryAgeNotifyMs)) {
+    sumpConsideredDry = true;
     sendNotification(IOT_EVENT_DRY);
-    trackDryPeriod = false;
+  }
+  if(!sumpConsideredDry && !floats[FLOAT_LEVEL_SUMP].On && floats[FLOAT_LEVEL_SUMP].stateChanged()) {
+    sumpLevel_LastOffTime = millis();
   }
 
   drivePump();
@@ -253,7 +275,7 @@ void setup() {
   setupIO();
   ensureWiFi();
 
-  updateConfig();
+  updateConfig(true);
 
   execMode = Monitoring;
 
@@ -272,9 +294,7 @@ void loop() {
       resetNotificationSent = sendNotification(IOT_EVENT_RESET);
     }
 
-    if(updateConfig()) {
-      inverseDebounceMask = ~AppConfig.DebounceMask;
-    }
+    updateConfig();
 
     checkButtonPress();
 
@@ -287,6 +307,9 @@ void loop() {
     if(wifiConnected()) {
       digitalWrite(LED_BLUE_PIN, flipBlueLed ? 0 : 1);
       flipBlueLed = !flipBlueLed;
+    }
+    else {
+      digitalWrite(LED_BLUE_PIN, 1); //off
     }
 
     lastLoopRun = millis();
