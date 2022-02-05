@@ -56,7 +56,7 @@ void soundAlarm(int incomingAlarm) {
 
   if(incomingAlarm > IOT_EVENT_NONE) {
       if(incomingAlarm < currentAlarm) {
-        log("Current alarm: %d. Incoming alarm %d ignored.", currentAlarm, incomingAlarm);
+        logd("Current alarm: %d. Incoming alarm %d ignored.", currentAlarm, incomingAlarm);
         return;
       }
       currentAlarm = incomingAlarm;

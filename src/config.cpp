@@ -8,7 +8,7 @@ extern WiFiClient wifiClient;
 
 ApplicationConfig AppConfig;
 
-#define CONFIG_URL    IOT_API_BASE_URL "/config?deviceid=sump"
+#define CONFIG_URL    IOT_API_BASE_URL "/config?deviceid=" DEVICE_ID
 
 template <typename T>
 void updateValue(const JsonObject &jconfig, const char* key, T &currentValue, int multiplier) {
@@ -38,12 +38,14 @@ void parseConfig(const char* json) {
   updateValue(config, "DryAgeNotifySec", AppConfig.DryAgeNotifyMs, 1000);
   updateValue(config, "MaxPumpRunTimeSec", AppConfig.MaxPumpRunTimeMs, 1000);
   updateValue(config, "PumpTestRunSec", AppConfig.PumpTestRunMs, 1000);
+  updateValue(config, "PumpTestRunMinIntervalSec", AppConfig.PumpTestRunMinIntervalMs, 1000);
   updateValue(config, "DebugLog", AppConfig.DebugLog);
+  updateValue(config, "PostLog", AppConfig.PostLog);
 
   AppConfig.inverseDebounceMask = ~AppConfig.DebounceMask;
 
-  log("Configuration pulled from %s", CONFIG_URL);
-  log(json);
+  logd("Configuration pulled from %s", CONFIG_URL);
+  logd(json);
 }
 
 unsigned long lastConfigUpdate = 0;
@@ -52,10 +54,13 @@ void updateConfig(bool force) {
   if(!force && (now - lastConfigUpdate < AppConfig.UpdateConfigMs)) {
     return;
   }
+  if(force) {
+    logd("Forced config update.");
+  }
   lastConfigUpdate = now;
 
   if(ensureWiFi()) {
-    httpClient.setTimeout(10000);
+    httpClient.setTimeout(4000);
     httpClient.begin(wifiClient, CONFIG_URL);
     int code = httpClient.GET();
     if(code == 200) {
@@ -63,7 +68,7 @@ void updateConfig(bool force) {
       parseConfig(body.c_str());
     }
     else {
-      log("Cannot pull config. Http code %d", code);
+      log("Cannot pull config from %s. Http code %d", CONFIG_URL, code);
     }
     httpClient.end();
   }

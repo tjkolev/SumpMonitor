@@ -4,7 +4,7 @@
 #include <main.h>
 
 void setupWiFi() {
-  log("Setting up Wifi.");
+  logd("Setting up Wifi.");
 
   WiFi.disconnect();
   delay(5 * 1000);

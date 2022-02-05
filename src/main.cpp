@@ -17,6 +17,7 @@ ExecutionMode execMode = Initializing;
 bool testButtonPressed = false;
 bool enableOnButtonPress = false;
 IRAM_ATTR void onButtonPress() {
+  Serial.println("onButtonPress invoked.");
   if(enableOnButtonPress) {
     testButtonPressed = true;
   }
@@ -45,7 +46,7 @@ char* formatMillis(char* buff, unsigned long milliseconds) {
 #define LOG_BUFF_LEN 600
 char logMsgBuffer[LOG_BUFF_LEN];
 char millisFmtBuffer[24];
-const char* log(const char* format, ...)
+void log(const char* format, ...)
 {
   va_list args;
   va_start(args, format);
@@ -57,8 +58,7 @@ const char* log(const char* format, ...)
 
   va_end(args);
   Serial.println(logMsgBuffer);
-
-  return logMsgBuffer;
+  postLog(logMsgBuffer);
 }
 
 void setupIO() {
@@ -76,7 +76,7 @@ void setupIO() {
   digitalWrite(LED_RED_PIN, 1); // off
 
   pinMode(BUTTON_TEST_PIN, INPUT);
-  attachInterrupt(digitalPinToInterrupt(BUTTON_TEST_PIN), onButtonPress, RISING);
+  //attachInterrupt(digitalPinToInterrupt(BUTTON_TEST_PIN), onButtonPress, RISING);
 }
 
 struct FloatData {
@@ -103,7 +103,7 @@ FloatData floats[FLOAT_COUNT] = {
 
 #define TXT_FLOAT_STATE_LEN   16
 char floatsState[TXT_FLOAT_STATE_LEN];
-char* getFloatsState() {
+const char* getFloatsState() {
   snprintf(floatsState, TXT_FLOAT_STATE_LEN, "[%d %d %d]",
       floats[FLOAT_LEVEL_SUMP].On, floats[FLOAT_LEVEL_BACKUP].On, floats[FLOAT_LEVEL_FLOOD].On);
   return floatsState;
@@ -188,10 +188,16 @@ void drivePump() {
 
 }
 
+// Testing pump only so often
+unsigned long lastPumpTest = 0;
 void testPump() {
-  digitalWrite(RELAY_PUMP_PIN, 1);
-  delay(AppConfig.PumpTestRunMs);
-  digitalWrite(RELAY_PUMP_PIN, 0);
+  if(millis() - lastPumpTest > AppConfig.PumpTestRunMinIntervalMs) {
+    digitalWrite(RELAY_PUMP_PIN, 1);
+    delay(AppConfig.PumpTestRunMs);
+    digitalWrite(RELAY_PUMP_PIN, 0);
+
+    lastPumpTest = millis();
+  }
 }
 
 bool floatStateChanged() {
@@ -203,7 +209,7 @@ bool floatStateChanged() {
 void logFloatsState() {
 
   if(floatStateChanged()) {
-    log("Floats state: %s", getFloatsState());
+    logd("Floats state: %s", getFloatsState());
 
     floats[FLOAT_LEVEL_SUMP].logState();
     floats[FLOAT_LEVEL_BACKUP].logState();
@@ -221,8 +227,9 @@ void checkAllFloats() {
   }
 
   if(!verifyFloatsState()) {
-    const char* logmsg = log("Invalid floats state: %s.", getFloatsState());
-    sendNotification(IOT_EVENT_BAD_STATE, logmsg, -1);
+    const char* floatStates = getFloatsState();
+    log("Invalid floats state: %s.", floatStates);
+    sendNotification(IOT_EVENT_BAD_STATE, floatStates, -1);
     soundAlarm(IOT_EVENT_BAD_STATE);
   }
 
@@ -251,6 +258,8 @@ void runTest() {
 
 void checkButtonPress() {
 
+  enableOnButtonPress = false;
+
   if(testButtonPressed) {
     bool alarmOn = checkAlarm();
     log("Button was pressed - %s", (alarmOn ? "Stopping alarm." : "Running test."));
@@ -263,12 +272,13 @@ void checkButtonPress() {
   }
 
   testButtonPressed = false;
+  enableOnButtonPress = true;
 }
 
 void setup() {
   // put your setup code here, to run once:
   Serial.begin(115200); // Start the Serial communication to send messages to the computer
-  delay(10);
+  delay(100);
 
   log("\nSetting up...");
 
@@ -301,8 +311,6 @@ void loop() {
     checkAllFloats(); // Gist of the work.
 
     soundAlarm(); // Keeps the alarms going on if needed.
-
-    enableOnButtonPress = true;
 
     if(wifiConnected()) {
       digitalWrite(LED_BLUE_PIN, flipBlueLed ? 0 : 1);
